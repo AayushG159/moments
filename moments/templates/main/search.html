@@ -21,7 +21,6 @@
   </div>
   <div class="col-md-9">
     {% if results %}
-      <h5>{{ results|length }} results</h5>
       {% for item in results %}
       {% if category == 'photo' %}
         {{ photo_card(item) }}
@@ -29,7 +28,7 @@
         {{ user_card(item) }}
       {% else %}
       <a class="badge text-bg-light rounded-pill" href="{{ url_for('.show_tag', tag_id=item.id) }}">
-        {{ item.name }} {{ item.photos|length }}
+        {{ item.name }}
       </a>
       {% endif %}
       {% endfor %}
