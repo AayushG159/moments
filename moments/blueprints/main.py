@@ -8,7 +8,7 @@ from moments.decorators import confirm_required, permission_required
 from moments.forms.main import CommentForm, DescriptionForm, TagForm
 from moments.models import Collection, Comment, Follow, Notification, Photo, Tag, User
 from moments.notifications import push_collect_notification, push_comment_notification
-from moments.utils import flash_errors, redirect_back, rename_image, resize_image, validate_image
+from moments.utils import flash_errors, redirect_back, rename_image, resize_image, validate_image, get_captions_tags
 
 main_bp = Blueprint('main', __name__)
 
@@ -29,13 +29,7 @@ def index():
     else:
         pagination = None
         photos = None
-    stmt = (
-        select(Tag)
-        .join(Tag.photos)
-        .group_by(Tag.id)
-        .order_by(func.count(Photo.id).desc())
-        .limit(10)
-    )
+    stmt = select(Tag).join(Tag.photos).group_by(Tag.id).order_by(func.count(Photo.id).desc()).limit(10)
     tags = db.session.scalars(stmt).all()
     return render_template('main/index.html', pagination=pagination, photos=photos, tags=tags)
 
@@ -63,7 +57,13 @@ def search():
     elif category == 'tag':
         pagination = Tag.query.whooshee_search(q).paginate(page=page, per_page=per_page)
     else:
-        pagination = Photo.query.whooshee_search(q).paginate(page=page, per_page=per_page)
+        # pagination = Photo.query.whooshee_search(q).paginate(page=page, per_page=per_page)
+        pagination = (
+            Photo.query.join(Photo.tags)
+            .filter(Tag.name.ilike(f'%{q}%'))
+            .group_by(Photo.id)
+            .paginate(page=page, per_page=per_page)
+        )
     results = pagination.items
     return render_template('main/search.html', q=q, results=results, pagination=pagination, category=category)
 
@@ -131,10 +131,16 @@ def upload():
             return 'Invalid image.', 400
         filename = rename_image(f.filename)
         f.save(current_app.config['MOMENTS_UPLOAD_PATH'] / filename)
+        description, tags = get_captions_tags(current_app.config['MOMENTS_UPLOAD_PATH'] / filename)
         filename_s = resize_image(f, filename, current_app.config['MOMENTS_PHOTO_SIZES']['small'])
         filename_m = resize_image(f, filename, current_app.config['MOMENTS_PHOTO_SIZES']['medium'])
         photo = Photo(
-            filename=filename, filename_s=filename_s, filename_m=filename_m, author=current_user._get_current_object()
+            filename=filename,
+            filename_s=filename_s,
+            filename_m=filename_m,
+            author=current_user._get_current_object(),
+            description=description,
+            tags=tags,
         )
         db.session.add(photo)
         db.session.commit()
@@ -154,7 +160,6 @@ def show_photo(photo_id):
     comment_form = CommentForm()
     description_form = DescriptionForm()
     tag_form = TagForm()
-
     description_form.description.data = photo.description
     return render_template(
         'main/photo.html',

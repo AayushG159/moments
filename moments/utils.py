@@ -1,20 +1,27 @@
 import uuid
+import os
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin, urlparse
 from pathlib import Path
+from azure.ai.vision.imageanalysis import ImageAnalysisClient
+from azure.ai.vision.imageanalysis.models import VisualFeatures
+from azure.core.credentials import AzureKeyCredential
+from moments.models import Tag
 
 import jwt
 import PIL
 from flask import current_app, flash, redirect, request, url_for
 from jwt.exceptions import InvalidTokenError
 from PIL import Image
+from moments.core.extensions import db
+from sqlalchemy import func, select
 
 
 def generate_token(user, operation, expiration=3600, **kwargs):
     payload = {
         'id': user.id,
         'operation': operation.value,
-        'exp': datetime.now(timezone.utc) + timedelta(seconds=expiration)
+        'exp': datetime.now(timezone.utc) + timedelta(seconds=expiration),
     }
     payload.update(**kwargs)
     return jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
@@ -76,3 +83,44 @@ def flash_errors(form):
     for field, errors in form.errors.items():
         for error in errors:
             flash(f'Error in the {getattr(form, field).label.text} field - {error}')
+
+
+def get_captions_tags(image_path):
+    description = None
+    tags = []
+    try:
+        endpoint = os.environ['VISION_ENDPOINT']
+        key = os.environ['VISION_KEY']
+    except Exception:
+        print("Missing environment variable 'VISION_ENDPOINT' or 'VISION_KEY'")
+        return (description, tags)
+
+    client = ImageAnalysisClient(endpoint=endpoint, credential=AzureKeyCredential(key))
+
+    try:
+        with open(image_path, 'rb') as f:
+            image_data = f.read()
+    except OSError as e:
+        print(f"Error opening image file: {e}")
+        return (description, tags)
+
+    result = client.analyze(
+        image_data=image_data,
+        visual_features=[VisualFeatures.CAPTION, VisualFeatures.TAGS],
+        gender_neutral_caption=True,
+    )
+
+    
+    if result.caption is not None:
+        description = result.caption.text
+    
+    if result.tags is not None:
+        for tagObj in result.tags.list:
+            tag = db.session.scalar(select(Tag).filter_by(name=tagObj.name))
+            if tag is None:
+                tag = Tag(name=tagObj.name)
+                db.session.add(tag)
+                db.session.commit()
+            tags.append(tag)
+    
+    return (description, tags)
